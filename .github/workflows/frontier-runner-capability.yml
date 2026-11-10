@@ -1,0 +1,68 @@
+name: Frontier harness runner capability
+
+"on":
+  push:
+    branches: ["glee/frontier-capability-20261110-0c8444a85053"]
+    paths: [".github/workflows/frontier-runner-capability.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: glee/frontier-capability-20261110-0c8444a85053
+  cancel-in-progress: false
+
+jobs:
+  capability:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Read Linux and Docker capability metadata
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import platform
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          report = {
+              "schema": "glee.frontier.runner_capability.v1",
+              "scope": "read-only CI capability observation",
+              "system": platform.system(),
+              "architecture": platform.machine(),
+              "root_free_bytes": shutil.disk_usage("/").free,
+              "docker_present": shutil.which("docker", path="/usr/bin:/bin") is not None,
+              "docker_endpoint": "unix:///var/run/docker.sock",
+              "docker_config": "ephemeral_empty_directory",
+              "docker_environment_sanitized": True,
+              "container_creations": 0,
+              "image_pulls": 0,
+              "model_calls": 0,
+              "benchmark_controls_run": 0,
+              "grading_admission": "NOT_ESTABLISHED_BY_THIS_PROBE",
+          }
+          meminfo = Path("/proc/meminfo").read_text()
+          for name in ("MemTotal", "MemAvailable"):
+              value = next(line for line in meminfo.splitlines() if line.startswith(name + ":"))
+              report[name + "_bytes"] = int(value.split()[1]) * 1024
+          controllers = Path("/sys/fs/cgroup/cgroup.controllers")
+          report["cgroup_v2_controllers"] = controllers.read_text().strip().split() if controllers.exists() else []
+          if report["docker_present"] and Path("/var/run/docker.sock").is_socket():
+              fmt = '{"version":{{json .ServerVersion}},"os":{{json .OSType}},"arch":{{json .Architecture}},"cpus":{{json .NCPU}},"memory_bytes":{{json .MemTotal}},"cgroup_driver":{{json .CgroupDriver}},"cgroup_version":{{json .CgroupVersion}}}'
+              try:
+                  with tempfile.TemporaryDirectory(prefix="glee-frontier-docker-") as config:
+                      result = subprocess.run([shutil.which("docker", path="/usr/bin:/bin"), "--config", config, "--host", "unix:///var/run/docker.sock", "info", "--format", fmt], env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}, capture_output=True, text=True, timeout=10)
+                  report["docker_info_returncode"] = result.returncode
+                  if result.returncode == 0:
+                      report["docker"] = json.loads(result.stdout)
+              except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+                  report["docker_probe_error"] = type(error).__name__
+          passed = (report["system"] == "Linux" and report["architecture"] in ("x86_64", "amd64") and report.get("docker_info_returncode") == 0)
+          report["status"] = "CAPABILITY_OBSERVED" if passed else "CAPABILITY_NOT_CONFIRMED"
+          print("GLEE_RUNNER_PROBE_JSON=" + json.dumps(report, sort_keys=True))
+          sys.exit(0 if passed else 1)
+          PY
