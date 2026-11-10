@@ -58,7 +58,8 @@ yYAFapkoLtw9FjT759fzIpa0wPaR5U0ExsHhnwljMO3TAgMBAAE=
 
 
 def digest(v) -> str:
-    return hashlib.sha256(json.dumps(v, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    # Match the canonical public-row binder's ASCII-escaped JSON contract.
+    return hashlib.sha256(json.dumps(v, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def run(argv, *, timeout=30, env=None, check=False, text=True):
@@ -325,7 +326,7 @@ def main() -> int:
         shutil.copy2(archive, input_dir / "base_commit.tar"); (input_dir / "test.patch").write_text(private["test_patch"]); (input_dir / "solution.patch").write_text(""); (input_dir / "test_cmd.sh").write_text(" ; ".join(private["test_cmds"]) + "\n")
         for p in input_dir.iterdir(): p.chmod(0o600)
         lease.begin(); report["stage"] = "container_create"; report["effect_flags"]["container_create"] = "IN_PROGRESS"; cid = "glee-ibm-untreated-" + secrets.token_hex(8); nonce = secrets.token_hex(16); lease.identity = {"cid": None, "name": cid, "nonce": nonce}
-        args = [docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "create", "--name", cid, "--label", "glee.owner=sanji", "--label", "glee.qualifier=ibm", "--label", "glee.nonce=" + nonce, "--label", "glee.name=" + cid, "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=64", "--memory=2g", "--memory-swap=2g", "--cpus=1", "--user=%s:%s" % (os.getuid(), os.getgid()), "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777", "--tmpfs=/testbed:rw,noexec,nosuid,nodev,size=1024m,mode=1777", "--mount", "type=bind,src=%s,dst=/input,readonly" % input_dir, "--workdir=/testbed", "--entrypoint=/bin/bash", IMAGE_REPO + "@" + IMAGE_MANIFEST, "-lc", "set -euo pipefail; rm -rf /testbed/* /testbed/.[!.]* /testbed/..?* 2>/dev/null || true; tar -xf /input/base_commit.tar -C /testbed; unset $(compgen -v | grep '^GIT_' || true); git -C /testbed init -q; git -C /testbed add -A; git -C /testbed commit -qm base; git -C /testbed apply --reject --whitespace=nowarn /input/test.patch; bash /input/test_cmd.sh"]
+        args = [docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "create", "--name", cid, "--label", "glee.owner=sanji", "--label", "glee.qualifier=ibm", "--label", "glee.nonce=" + nonce, "--label", "glee.name=" + cid, "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=64", "--memory=2g", "--memory-swap=2g", "--cpus=1", "--user=%s:%s" % (os.getuid(), os.getgid()), "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777", "--tmpfs=/testbed:rw,noexec,nosuid,nodev,size=1024m,mode=1777", "--mount", "type=bind,src=%s,dst=/input,readonly" % input_dir, "--workdir=/testbed", "--entrypoint=/bin/bash", IMAGE_REPO + "@" + IMAGE_MANIFEST, "-lc", "set -euo pipefail; rm -rf /testbed/* /testbed/.[!.]* /testbed/..?* 2>/dev/null || true; tar -xf /input/base_commit.tar -C /testbed; unset $(compgen -v | grep '^GIT_' || true); git -C /testbed init -q; git -C /testbed add -A; git -c user.name='GLEE control' -c user.email='control@invalid' -c commit.gpgsign=false -C /testbed commit -qm base; git -C /testbed apply --reject --whitespace=nowarn /input/test.patch; bash /input/test_cmd.sh"]
         created = run(args, timeout=30, env=env); 
         if created.returncode != 0: raise RuntimeError("container_create_failed")
         actual = created.stdout.strip(); lease.identity["cid"] = actual; report["effect_flags"]["container_create"] = "SUCCEEDED"; report["stage"] = "container_start"
