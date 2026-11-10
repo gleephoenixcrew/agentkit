@@ -59,6 +59,15 @@ yYAFapkoLtw9FjT759fzIpa0wPaR5U0ExsHhnwljMO3TAgMBAAE=
 -----END PUBLIC KEY-----
 """
 
+SAFE_FAILURE_REASONS = {
+    "image_inspect_failed", "pinned_image_pull_failed", "pinned_image_not_verified",
+    "parquet_revision_or_etag_mismatch", "parquet_transfer_cap_exceeded", "parquet_integrity_mismatch",
+    "parquet_rowgroup_identity_mismatch", "parquet_target_row_missing", "public_row_binding_mismatch",
+    "original_parser_command_binding_mismatch", "base_commit_identity_mismatch", "container_create_failed",
+    "container_start_failed", "created_pid_not_zero", "pid_birth_missing", "cleanup_or_capture_unproven",
+    "operation_root_reuse_denied", "image_identity_or_diffid_mismatch",
+}
+
 
 def digest(v) -> str:
     # Match the canonical public-row binder's ASCII-escaped JSON contract.
@@ -127,9 +136,10 @@ def read_private_row(path: Path) -> dict:
 
 
 def verify_image(docker: str, cfg: str) -> dict:
-    result = run([docker, "--config", cfg, "--host", "unix:///var/run/docker.sock", "image", "inspect", IMAGE_REPO], timeout=30)
+    inspect_ref = IMAGE_REPO + "@" + IMAGE_MANIFEST
+    result = run([docker, "--config", cfg, "--host", "unix:///var/run/docker.sock", "image", "inspect", inspect_ref], timeout=30)
     if result.returncode != 0:
-        return {"status": "IMAGE_ABSENT", "reason": "image_inspect_failed"}
+        return {"status": "IMAGE_ABSENT", "failure_reason": "image_inspect_failed", "observations": {"inspect_reference": inspect_ref, "inspect_returncode": result.returncode, "repo_digest_match": False, "identity_mode": "UNOBSERVED", "diff_ids_match": False, "diff_id_count": 0}}
     row = json.loads(result.stdout)[0]
     repo_digests = row.get("RepoDigests") or []
     rootfs = (row.get("RootFS") or {}).get("Layers") or []
@@ -141,9 +151,26 @@ def verify_image(docker: str, cfg: str) -> dict:
         identity_mode = "MANIFEST_DIGEST"
     else:
         identity_mode = "UNSUPPORTED_ID"
-    if not any(IMAGE_MANIFEST in x for x in repo_digests) or identity_mode == "UNSUPPORTED_ID" or rootfs != IMAGE_DIFF_IDS:
-        raise RuntimeError("image_identity_or_diffid_mismatch")
-    return {"status": "IMAGE_VERIFIED", "repo_digest_match": True, "image_id": image_id, "configuration_digest": config_digest, "identity_mode": identity_mode, "diff_id_count": len(rootfs)}
+    repo_digest_match = any(IMAGE_MANIFEST in x for x in repo_digests)
+    diff_ids_match = rootfs == IMAGE_DIFF_IDS
+    failed_predicates = []
+    if not repo_digest_match:
+        failed_predicates.append("repo_digest_match")
+    if identity_mode == "UNSUPPORTED_ID":
+        failed_predicates.append("identity_mode")
+    if not diff_ids_match:
+        failed_predicates.append("diff_ids_match")
+    return {
+        "status": "IMAGE_VERIFIED" if not failed_predicates else "IMAGE_UNVERIFIED",
+        "failure_reason": None if not failed_predicates else "image_predicate_failed:" + ",".join(failed_predicates),
+        "repo_digest_match": repo_digest_match,
+        "image_id": image_id,
+        "configuration_digest": config_digest,
+        "identity_mode": identity_mode,
+        "diff_id_count": len(rootfs),
+        "diff_ids_match": diff_ids_match,
+        "observations": {"inspect_reference": inspect_ref, "repo_digests": repo_digests, "observed_image_id": image_id, "observed_diff_ids": rootfs, "expected_manifest": IMAGE_MANIFEST, "expected_config": IMAGE_CONFIG, "expected_diff_id_count": len(IMAGE_DIFF_IDS), "failed_predicates": failed_predicates},
+    }
 
 
 def verify_docker_storage(docker: str, cfg: str, *, minimum_free_bytes: int = 8 * 1024**3) -> dict:
@@ -319,8 +346,8 @@ def main() -> int:
             if pull.returncode != 0: raise RuntimeError("pinned_image_pull_failed")
             image = verify_image(docker, str(cfg))
             report["effect_flags"]["image_pull"] = "SUCCEEDED"
-        report["image"] = {k: image.get(k) for k in ("status", "repo_digest_match", "identity_mode", "configuration_digest", "diff_id_count")}
-        if image["status"] != "IMAGE_VERIFIED": raise RuntimeError("pinned_image_not_verified")
+        report["image"] = image
+        if image["status"] != "IMAGE_VERIFIED": raise RuntimeError(image.get("failure_reason") or "pinned_image_not_verified")
         report["stage"] = "source_fetch"; report["effect_flags"]["source_fetch"] = "IN_PROGRESS"; repo = work / "source"; repo.mkdir(mode=0o700)
         run(["git", "init", "-q", str(repo)], timeout=30, check=True); run(["git", "-C", str(repo), "remote", "add", "origin", "https://github.com/aws-cloudformation/cfn-lint.git"], timeout=30, check=True); run(["git", "-C", str(repo), "fetch", "--depth=1", "origin", BASE], timeout=900, check=True)
         if run(["git", "-C", str(repo), "rev-parse", "FETCH_HEAD"], timeout=30).stdout.strip() != BASE: raise RuntimeError("base_commit_identity_mismatch")
@@ -350,7 +377,10 @@ def main() -> int:
         else: print("GLEE_OPAQUE_EVIDENCE_B64=" + envelope["envelope_b64"])
         print("GLEE_SANITIZED_RESULT=" + json.dumps(report, sort_keys=True)); return 0 if report["status"] == "UNTREATED_CONTROL_COMPLETE" else 2
     except Exception as exc:
-        report["status"] = "UNKNOWN_HELD"; report["failure_reason"] = f"{report.get('stage', 'unknown')}:{type(exc).__name__}"; report["error_type"] = type(exc).__name__
+        detail = str(exc) or type(exc).__name__
+        if detail not in SAFE_FAILURE_REASONS and not detail.startswith("image_predicate_failed:"):
+            detail = type(exc).__name__
+        report["status"] = "UNKNOWN_HELD"; report["failure_reason"] = f"{report.get('stage', 'unknown')}:{detail}"; report["error_type"] = type(exc).__name__
         for key, value in list(report["effect_flags"].items()):
             if value == "IN_PROGRESS": report["effect_flags"][key] = "UNKNOWN"
         cleanup_proven = False

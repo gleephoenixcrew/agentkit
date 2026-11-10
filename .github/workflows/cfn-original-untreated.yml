@@ -27,7 +27,7 @@ jobs:
           curl --fail --silent --show-error --location --max-time 30 \
             --output "$driver" \
             "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/tools/cfn_untreated_driver.py"
-          echo "243345ca3ed595ad6cbf93633f2f0474277ba5d0a339a84c1dd1c17a00c27425  $driver" | sha256sum --check --status
+          echo "7ef61bce1e9d093cf25f47e3a5fc2faa2650a28011aad03e1dc389dbb788b4c6  $driver" | sha256sum --check --status
           chmod 700 "$driver"
 
       - name: Install pinned PyArrow in a bounded isolated setup scope
