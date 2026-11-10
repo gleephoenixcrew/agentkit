@@ -36,6 +36,9 @@ PARQUET_URL = f"https://huggingface.co/datasets/SWE-bench-Live/SWE-bench-Live/re
 PARQUET_SIZE = 49_856_992
 PARQUET_SHA = "b8cd02f881baf1621b6ed17a2980f82a002d7e895c45c8653b0b696467dbf72e"
 PARQUET_ETAG = '"0c829aa2ca28e41e234497056a74b51c78336f12ec9e4f5adaff4d296046693b"'
+PARQUET_ABSOLUTE_ROW = 1803
+PARQUET_FIRST_SHARD_ROWS = 944
+PARQUET_LOCAL_ROW = PARQUET_ABSOLUTE_ROW - PARQUET_FIRST_SHARD_ROWS
 PUBLIC_SHA = "2961ab3f896a50530ea899a82c424a43c977f1b0e26d415a57a7d52548679827"
 EVALUATOR_SHA = "616c68561863b65ce4ad38b8e3e1d0f79d87774a03054970cb5040272268efe2"
 F2P_COUNT, P2P_COUNT = 3, 1601
@@ -102,13 +105,13 @@ def verify_parent_budget(*, cgroup_root: Path = Path("/sys/fs/cgroup"), proc_cgr
 
 def read_private_row(path: Path) -> dict:
     pf = pq.ParquetFile(path)
-    if pf.metadata.num_rows != 944 or pf.num_row_groups != 1:
+    if pf.metadata.num_rows != PARQUET_FIRST_SHARD_ROWS or pf.num_row_groups != 1 or not 0 <= PARQUET_LOCAL_ROW < pf.metadata.num_rows:
         raise RuntimeError("parquet_rowgroup_identity_mismatch")
     fields = ("repo", "instance_id", "base_commit", "created_at", "docker_image", "problem_statement", "patch", "test_patch", "test_cmds", "FAIL_TO_PASS", "PASS_TO_PASS", "rebuild_cmds", "log_parser")
     values = {}
     for field in fields:
         for i, batch in enumerate(pf.iter_batches(batch_size=1, row_groups=[0], columns=[field], use_threads=False)):
-            if i == 858:
+            if i == PARQUET_LOCAL_ROW:
                 values[field] = batch.column(0).to_pylist()[0]
                 break
         else:
