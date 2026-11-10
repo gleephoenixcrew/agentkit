@@ -81,9 +81,9 @@ def digest(v) -> str:
     return hashlib.sha256(json.dumps(v, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def run(argv, *, timeout=30, env=None, check=False, text=True):
+def run(argv, *, timeout=30, env=None, check=False, text=True, stdin=None, input_data=None, cwd=None):
     safe = env or {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": os.environ.get("RUNNER_TEMP", "/tmp"), "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
-    return subprocess.run(argv, timeout=timeout, env=safe, capture_output=True, text=text, check=check)
+    return subprocess.run(argv, timeout=timeout, env=safe, stdin=stdin, input=input_data, cwd=cwd, capture_output=True, text=text, check=check)
 
 
 def verify_parent_budget(*, cgroup_root: Path = Path("/sys/fs/cgroup"), proc_cgroup: Path = Path("/proc/self/cgroup"), expected_unit: str | None = None) -> dict:
@@ -165,7 +165,11 @@ def source_fetch_witness(repo: Path, archive: Path, expected_commit: str) -> dic
     validate_source_commit(observed_commit, expected_commit)
     if not archive.is_file() or archive.stat().st_size <= 0:
         raise RuntimeError("source_archive_missing")
-    archive_commit = run(["git", "get-tar-commit-id", str(archive)], timeout=30).stdout.strip()
+    with archive.open("rb") as archive_stream:
+        result = run(["git", "get-tar-commit-id"], timeout=30, stdin=archive_stream, cwd="/")
+    if result.returncode != 0:
+        raise RuntimeError("source_archive_commit_mismatch")
+    archive_commit = result.stdout.strip()
     validate_source_archive_commit(archive_commit, expected_commit)
     return {"status": "SOURCE_FETCH_VERIFIED", "commit_match": True, "archive_commit_match": True, "archive_bytes": archive.stat().st_size, "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
 
