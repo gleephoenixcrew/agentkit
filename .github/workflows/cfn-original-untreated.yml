@@ -1,0 +1,73 @@
+name: GLEE original cfn-lint untreated control
+
+"on":
+  push:
+    branches: ["glee/frontier-capability-20261110-0c8444a85053"]
+    paths:
+      - ".github/workflows/cfn-original-untreated.yml"
+      - "tools/cfn_untreated_driver.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: glee-original-cfn-lint-untreated
+  cancel-in-progress: false
+
+jobs:
+  cfn-original-untreated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Fetch the exact pushed public driver without checkout credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          driver="$RUNNER_TEMP/cfn_untreated_driver.py"
+          curl --fail --silent --show-error --location --max-time 30 \
+            --output "$driver" \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/tools/cfn_untreated_driver.py"
+          echo "10f107fc43d02d8524a9d59d3b76e5616405b0a72daf852bb76a5eacae8a17cb  $driver" | sha256sum --check --status
+          chmod 700 "$driver"
+
+      - name: Install pinned PyArrow in a bounded isolated setup scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid=$(id -u); gid=$(id -g)
+          wheel="$RUNNER_TEMP/pyarrow-26.0.1-cp312-cp312-manylinux_2_28_x86_64.whl"
+          target="$RUNNER_TEMP/glee-pyarrow"
+          mkdir -m 700 -p "$target"
+          curl --fail --silent --show-error --location --max-time 120 \
+            --output "$wheel" \
+            "https://files.pythonhosted.org/packages/d3/79/e2fc9b1317b7a21e7bcd57eb035cac3fe72f47af3efe2ec3b4dea9a08a04/pyarrow-26.0.1-cp312-cp312-manylinux_2_28_x86_64.whl"
+          echo "c718bf97a92a6dea97fd1062c3b9f9e2e83cb9cc926e752289fa4ffff41738f9  $wheel" | sha256sum --check --status
+          sudo -n systemd-run --unit="glee-ibm-sdk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --wait --pipe --collect \
+            --uid="$uid" --gid="$gid" \
+            --property=CPUQuota=100% --property=MemoryMax=768M --property=MemorySwapMax=0 --property=TasksMax=128 --property=RuntimeMaxSec=900 \
+            --setenv=PATH=/usr/bin:/bin --setenv=LANG=C.UTF-8 -- \
+            /usr/bin/python3.12 -m pip install --isolated --no-cache-dir --no-deps --no-index --target "$target" "$wheel"
+
+      - name: Establish exact trusted parent scope and run one untreated control
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid=$(id -u); gid=$(id -g)
+          unit="glee-cfn-parent-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo -n systemd-run --unit="$unit" --wait --pipe --collect \
+            --uid="$uid" --gid="$gid" \
+            --property=SupplementaryGroups=docker \
+            --property=CPUQuota=100% --property=MemoryMax=512M --property=MemorySwapMax=0 --property=TasksMax=64 --property=RuntimeMaxSec=5100 \
+            --setenv=GLEE_PARENT_UNIT="$unit" --setenv=PYTHONPATH="$RUNNER_TEMP/glee-pyarrow" \
+            --setenv=PATH=/usr/bin:/bin --setenv=LANG=C.UTF-8 -- \
+            /usr/bin/python3.12 "$RUNNER_TEMP/cfn_untreated_driver.py"
+
+      - name: Retire temporary reader target
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          find "$RUNNER_TEMP/glee-pyarrow" -depth -type f -delete 2>/dev/null || true
+          find "$RUNNER_TEMP/glee-pyarrow" -depth -type l -delete 2>/dev/null || true
+          find "$RUNNER_TEMP/glee-pyarrow" -depth -type d -empty -delete 2>/dev/null || true
+          find "$RUNNER_TEMP" -maxdepth 1 -type f -name 'pyarrow-26.0.1-*.whl' -delete 2>/dev/null || true
+          find "$RUNNER_TEMP" -maxdepth 1 -type f -name 'cfn_untreated_driver.py' -delete 2>/dev/null || true
