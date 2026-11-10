@@ -27,7 +27,7 @@ jobs:
           curl --fail --silent --show-error --location --max-time 30 \
             --output "$driver" \
             "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/tools/ibm_untreated_driver.py"
-          echo "4e5617ec27b3d68d1d26da76bbfddebfc200e3bcb9f8c8fbb569888247896674  $driver" | sha256sum --check --status
+          echo "2358702172008236c92c6d348e0ba60af24a783025a954c1f1baa94ce7d9bc98  $driver" | sha256sum --check --status
           chmod 700 "$driver"
 
       - name: Install pinned PyArrow in a bounded isolated setup scope

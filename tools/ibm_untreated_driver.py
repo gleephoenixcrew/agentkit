@@ -277,7 +277,7 @@ def retain_unknown_hold(root: Path, *, cid: str, nonce: str) -> Path:
 def main() -> int:
     root = Path(tempfile.mkdtemp(prefix="glee-ibm-untreated-")); root.chmod(0o700)
     lease = Lease(root / "operation", secrets.token_hex(16))
-    report = {"schema": "glee.remote.ibm.original_untreated.v1", "status": "STARTING", "instance_id": "IBM__mcp-context-forge-562", "control_counts": {"FAIL_TO_PASS": F2P_COUNT, "PASS_TO_PASS": P2P_COUNT, "required_total": F2P_COUNT + P2P_COUNT}, "provider_calls": 0, "model_subjects": 0}
+    report = {"schema": "glee.remote.ibm.original_untreated.v1", "status": "STARTING", "stage": "parent_preflight", "failure_reason": None, "effect_flags": {"dataset_fetch": "NOT_STARTED", "image_pull": "NOT_STARTED", "source_fetch": "NOT_STARTED", "container_create": "NOT_STARTED", "container_start": "NOT_STARTED", "benchmark_test": "NOT_STARTED", "cleanup": "NOT_STARTED"}, "instance_id": "IBM__mcp-context-forge-562", "control_counts": {"FAIL_TO_PASS": F2P_COUNT, "PASS_TO_PASS": P2P_COUNT, "required_total": F2P_COUNT + P2P_COUNT}, "provider_calls": 0, "model_subjects": 0}
     actual = None; docker = None; cfg = None; env = {}
     try:
         expected_parent_unit = os.environ.get("GLEE_PARENT_UNIT")
@@ -287,14 +287,18 @@ def main() -> int:
         if parent["status"] != "PARENT_BUDGET_VERIFIED": report["status"] = parent["status"]; print(json.dumps(report, sort_keys=True)); return 2
         if platform.system() != "Linux" or platform.machine() not in {"x86_64", "amd64"} or shutil.which("docker") is None:
             report["status"] = "UNSUPPORTED_RUNNER"; print(json.dumps(report, sort_keys=True)); return 2
-        work = root / "work"; work.mkdir(mode=0o700)
+        work = root / "work"; work.mkdir(mode=0o700); report["stage"] = "storage_preflight"
         docker = shutil.which("docker"); cfg = work / "docker-config"; cfg.mkdir(mode=0o700)
         env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(work)}
         storage = verify_docker_storage(docker, str(cfg)); report["docker_root_storage"] = storage
         if storage["status"] != "DOCKER_ROOT_STORAGE_VERIFIED": report["status"] = storage["status"]; print(json.dumps(report, sort_keys=True)); return 2
-        parquet = work / "full-00001-of-00002.parquet"
+        parquet = work / "full-00001-of-00002.parquet"; report["stage"] = "dataset_fetch"; report["effect_flags"]["dataset_fetch"] = "IN_PROGRESS"
         with urllib.request.urlopen(urllib.request.Request(PARQUET_URL, headers={"User-Agent": "GLEE-remote-IBM-original-control/1"}), timeout=120) as response, parquet.open("wb") as out:
-            if response.headers.get("X-Repo-Commit") != REV or response.headers.get("ETag") != PARQUET_ETAG: raise RuntimeError("parquet_revision_or_etag_mismatch")
+            # Hugging Face's final CDN response may omit X-Repo-Commit after
+            # following the redirect; the exact immutable URL revision remains
+            # the source proof, while ETag still binds the payload identity.
+            repo_commit = response.headers.get("X-Repo-Commit") or (REV if f"/{REV}/" in PARQUET_URL else None)
+            if repo_commit != REV or response.headers.get("ETag") != PARQUET_ETAG: raise RuntimeError("parquet_revision_or_etag_mismatch")
             total = 0
             while True:
                 chunk = response.read(1024 * 1024)
@@ -303,43 +307,48 @@ def main() -> int:
                 if total > 64 * 1024 * 1024: raise RuntimeError("parquet_transfer_cap_exceeded")
                 out.write(chunk)
         if total != PARQUET_SIZE or hashlib.sha256(parquet.read_bytes()).hexdigest() != PARQUET_SHA: raise RuntimeError("parquet_integrity_mismatch")
-        private = read_private_row(parquet); report["parser"] = private["log_parser"]
+        report["effect_flags"]["dataset_fetch"] = "SUCCEEDED"; private = read_private_row(parquet); report["parser"] = private["log_parser"]; report["stage"] = "image_admission"
         image = verify_image(docker, str(cfg))
         if image["status"] == "IMAGE_ABSENT":
+            report["effect_flags"]["image_pull"] = "IN_PROGRESS"
             pull = subprocess.run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "pull", "--quiet", IMAGE_REPO + "@" + IMAGE_MANIFEST], env=env, capture_output=True, text=True, timeout=900, check=False)
             if pull.returncode != 0: raise RuntimeError("pinned_image_pull_failed")
             image = verify_image(docker, str(cfg))
+            report["effect_flags"]["image_pull"] = "SUCCEEDED"
         report["image"] = {k: image.get(k) for k in ("status", "repo_digest_match", "identity_mode", "configuration_digest", "diff_id_count")}
         if image["status"] != "IMAGE_VERIFIED": raise RuntimeError("pinned_image_not_verified")
-        repo = work / "source"; repo.mkdir(mode=0o700)
+        report["stage"] = "source_fetch"; report["effect_flags"]["source_fetch"] = "IN_PROGRESS"; repo = work / "source"; repo.mkdir(mode=0o700)
         run(["git", "init", "-q", str(repo)], timeout=30, check=True); run(["git", "-C", str(repo), "remote", "add", "origin", "https://github.com/IBM/mcp-context-forge.git"], timeout=30, check=True); run(["git", "-C", str(repo), "fetch", "--depth=1", "origin", BASE], timeout=900, check=True)
         if run(["git", "-C", str(repo), "rev-parse", "FETCH_HEAD"], timeout=30).stdout.strip() != BASE: raise RuntimeError("base_commit_identity_mismatch")
-        archive = work / "base_commit.tar"; run(["git", "-C", str(repo), "archive", "--format=tar", BASE, "-o", str(archive)], timeout=300, check=True)
+        archive = work / "base_commit.tar"; run(["git", "-C", str(repo), "archive", "--format=tar", BASE, "-o", str(archive)], timeout=300, check=True); report["effect_flags"]["source_fetch"] = "SUCCEEDED"
         input_dir = work / "input"; input_dir.mkdir(mode=0o700)
         shutil.copy2(archive, input_dir / "base_commit.tar"); (input_dir / "test.patch").write_text(private["test_patch"]); (input_dir / "solution.patch").write_text(""); (input_dir / "test_cmd.sh").write_text(" ; ".join(private["test_cmds"]) + "\n")
         for p in input_dir.iterdir(): p.chmod(0o600)
-        lease.begin(); cid = "glee-ibm-untreated-" + secrets.token_hex(8); nonce = secrets.token_hex(16); lease.identity = {"cid": None, "name": cid, "nonce": nonce}
+        lease.begin(); report["stage"] = "container_create"; report["effect_flags"]["container_create"] = "IN_PROGRESS"; cid = "glee-ibm-untreated-" + secrets.token_hex(8); nonce = secrets.token_hex(16); lease.identity = {"cid": None, "name": cid, "nonce": nonce}
         args = [docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "create", "--name", cid, "--label", "glee.owner=sanji", "--label", "glee.qualifier=ibm", "--label", "glee.nonce=" + nonce, "--label", "glee.name=" + cid, "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=64", "--memory=2g", "--memory-swap=2g", "--cpus=1", "--user=%s:%s" % (os.getuid(), os.getgid()), "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777", "--tmpfs=/testbed:rw,noexec,nosuid,nodev,size=1024m,mode=1777", "--mount", "type=bind,src=%s,dst=/input,readonly" % input_dir, "--workdir=/testbed", "--entrypoint=/bin/bash", IMAGE_REPO + "@" + IMAGE_MANIFEST, "-lc", "set -euo pipefail; rm -rf /testbed/* /testbed/.[!.]* /testbed/..?* 2>/dev/null || true; tar -xf /input/base_commit.tar -C /testbed; unset $(compgen -v | grep '^GIT_' || true); git -C /testbed init -q; git -C /testbed add -A; git -C /testbed commit -qm base; git -C /testbed apply --reject --whitespace=nowarn /input/test.patch; bash /input/test_cmd.sh"]
         created = run(args, timeout=30, env=env); 
         if created.returncode != 0: raise RuntimeError("container_create_failed")
-        actual = created.stdout.strip(); lease.identity["cid"] = actual
+        actual = created.stdout.strip(); lease.identity["cid"] = actual; report["effect_flags"]["container_create"] = "SUCCEEDED"; report["stage"] = "container_start"
         inspect = json.loads(run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "inspect", actual], timeout=30, env=env, check=True).stdout)[0]; validate_container_inspect(inspect, cid=actual, name=cid, nonce=nonce, uid=os.getuid(), gid=os.getgid(), image_ids={IMAGE_CONFIG, IMAGE_MANIFEST}); lease.identity["created_pid"] = (inspect.get("State") or {}).get("Pid", 0)
         if lease.identity["created_pid"] != 0: raise RuntimeError("created_pid_not_zero")
-        started = run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "start", actual], timeout=30, env=env)
+        report["effect_flags"]["container_start"] = "IN_PROGRESS"; started = run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "start", actual], timeout=30, env=env)
         if started.returncode != 0: raise RuntimeError("container_start_failed")
+        report["effect_flags"]["container_start"] = "SUCCEEDED"; report["stage"] = "benchmark_test"; report["effect_flags"]["benchmark_test"] = "IN_PROGRESS"
         running = json.loads(run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "inspect", actual], timeout=30, env=env, check=True).stdout)[0]; lease.identity["pid_birth"] = {"pid": (running.get("State") or {}).get("Pid"), "started_at": (running.get("State") or {}).get("StartedAt")}
         if not isinstance(lease.identity["pid_birth"]["pid"], int) or lease.identity["pid_birth"]["pid"] <= 0: raise RuntimeError("pid_birth_missing")
         raw_out, raw_err = work / "stdout.raw", work / "stderr.raw"; proc = subprocess.Popen([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "logs", "--follow", actual], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env); outb, errb = proc.communicate(timeout=OP_DEADLINE - CLEANUP_MARGIN); raw_out.write_bytes(outb); raw_err.write_bytes(errb); capture_complete = proc.returncode == 0
         parsed = parse_pytest((outb + b"\n" + errb).decode("utf-8", "replace")); report["capture"] = {"complete": capture_complete, "stdout_eof": capture_complete, "stderr_eof": capture_complete, "stdout_bytes": len(outb), "stderr_bytes": len(errb), "stdout_sha256": hashlib.sha256(outb).hexdigest(), "stderr_sha256": hashlib.sha256(errb).hexdigest()}
-        report["parsed_counts"] = {"parsed": len(parsed), "required": F2P_COUNT + P2P_COUNT}
-        rm = run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "rm", "-f", actual], timeout=30, env=env); absent = not run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "container", "ls", "-a", "--no-trunc", "--filter", "id=" + actual, "--format", "{{.ID}}"], timeout=30, env=env).stdout.strip(); report["cleanup"] = {"remove_returncode": rm.returncode, "container_absent": absent}
+        report["effect_flags"]["benchmark_test"] = "SUCCEEDED"; report["parsed_counts"] = {"parsed": len(parsed), "required": F2P_COUNT + P2P_COUNT}; report["stage"] = "cleanup"; report["effect_flags"]["cleanup"] = "IN_PROGRESS"
+        rm = run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "rm", "-f", actual], timeout=30, env=env); absent = not run([docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "container", "ls", "-a", "--no-trunc", "--filter", "id=" + actual, "--format", "{{.ID}}"], timeout=30, env=env).stdout.strip(); report["cleanup"] = {"remove_returncode": rm.returncode, "container_absent": absent}; report["effect_flags"]["cleanup"] = "SUCCEEDED" if absent else "UNKNOWN"
         if not absent or not capture_complete: raise RuntimeError("cleanup_or_capture_unproven")
         report["status"] = "UNTREATED_CONTROL_COMPLETE"; envelope = emit_envelope([raw_out, raw_err], report, work); ep = envelope.get("payload") or {}; report["encrypted_evidence"] = {"status": envelope.get("status"), "export_bytes": envelope.get("export_bytes"), "ciphertext_sha256": ep.get("ciphertext_sha256"), "wrapped_key_sha256": ep.get("wrapped_key_sha256"), "raw_logs_complete": ep.get("raw_logs_complete")}
         if envelope["status"] != "OPAQUE_EVIDENCE_READY": report["status"] = envelope["status"]
         else: print("GLEE_OPAQUE_EVIDENCE_B64=" + envelope["envelope_b64"])
         print("GLEE_SANITIZED_RESULT=" + json.dumps(report, sort_keys=True)); return 0 if report["status"] == "UNTREATED_CONTROL_COMPLETE" else 2
     except Exception as exc:
-        report["status"] = "UNKNOWN_HELD"; report["error_type"] = type(exc).__name__
+        report["status"] = "UNKNOWN_HELD"; report["failure_reason"] = f"{report.get('stage', 'unknown')}:{type(exc).__name__}"; report["error_type"] = type(exc).__name__
+        for key, value in list(report["effect_flags"].items()):
+            if value == "IN_PROGRESS": report["effect_flags"][key] = "UNKNOWN"
         cleanup_proven = False
         if actual and docker and cfg:
             try:
