@@ -239,10 +239,12 @@ def validate_container_inspect(row: dict, *, cid: str, name: str, nonce: str, ui
     if any(any(secret in str(item).split("=", 1)[0].upper() for secret in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "OPENAI", "CODEX_HOME")) for item in env):
         raise RuntimeError("container_credentials_exposed")
     tmpfs = host.get("Tmpfs") or {}
-    for destination, size in (("/tmp", "256m"), ("/testbed", "1024m")):
+    for destination, size in (("/tmp", "256m"), ("/testbed", "1024m"), ("/.mem0", "16m")):
         values = tmpfs.get(destination); values = values if isinstance(values, list) else [values]
         if not any(isinstance(item, str) and all(flag in item for flag in ("rw", "noexec", "nosuid", "nodev", f"size={size}", f"uid={uid}", f"gid={gid}")) for item in values):
             raise RuntimeError("container_tmpfs_policy_mismatch")
+    if "mode=0700" not in str(tmpfs.get("/.mem0", "")):
+        raise RuntimeError("container_tmpfs_policy_mismatch")
     if not any(m.get("Destination") == "/input" and m.get("Type") == "bind" and m.get("RW") is False for m in (row.get("Mounts") or [])):
         raise RuntimeError("container_input_mount_mismatch")
 
@@ -316,6 +318,11 @@ def parse_bootstrap_witness(log: str, *, expected_uid: int, expected_gid: int) -
         workspace_uid, workspace_gid = (int(item) for item in values["testbed"].split(":", 1))
         tmpfs_uid, tmpfs_gid = (int(item) for item in values["tmpfs"].split(":", 1))
         process_uid, process_gid = int(values["uid"]), int(values["gid"])
+        cache_uid, cache_gid, cache_mode = values["mem0"].split(":")
+        if values.get("mem0_write") != "1":
+            raise ValueError("bounded_cache_write_unproven")
+        if (int(cache_uid), int(cache_gid), cache_mode) != (expected_uid, expected_gid, "700"):
+            raise ValueError("bounded_cache_ownership_or_mode")
     except (KeyError, ValueError):
         return {"status": "INVALID_BENCHMARK_EVIDENCE", "failure_code": "BOOTSTRAP_OWNERSHIP_READBACK_UNPROVEN"}
     return validate_bootstrap(process_uid=process_uid, process_gid=process_gid,
@@ -550,7 +557,7 @@ def main() -> int:
         if not (input_owned and input_readback and temp_owned and temp_readback):
             raise RuntimeError("bootstrap_ownership_invalid")
         lease.begin(); report["stage"] = "container_create"; report["effect_flags"]["container_create"] = "IN_PROGRESS"; cid = "glee-praisonai-untreated-" + secrets.token_hex(8); nonce = secrets.token_hex(16); lease.identity = {"cid": None, "name": cid, "nonce": nonce}
-        args = [docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "create", "--name", cid, "--label", "glee.owner=sanji", "--label", "glee.qualifier=praisonai", "--label", "glee.nonce=" + nonce, "--label", "glee.name=" + cid, "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=64", "--memory=2g", "--memory-swap=2g", "--cpus=1", "--user=%s:%s" % (host_uid, host_gid), "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777,uid=%s,gid=%s" % (host_uid, host_gid), "--tmpfs=/testbed:rw,noexec,nosuid,nodev,size=1024m,mode=1777,uid=%s,gid=%s" % (host_uid, host_gid), "--mount", "type=bind,src=%s,dst=/input,readonly" % input_dir, "--workdir=/testbed", "--entrypoint=/bin/bash", IMAGE_REPO + "@" + IMAGE_MANIFEST, "-lc", "set -euo pipefail; uid=$(id -u); gid=$(id -g); test \"$uid\" = \"%s\"; test \"$gid\" = \"%s\"; testbed_owner=$(stat -c '%%u:%%g' /testbed); tmpfs_owner=$(stat -c '%%u:%%g' /tmp); test \"$testbed_owner\" = \"$uid:$gid\"; test \"$tmpfs_owner\" = \"$uid:$gid\"; printf 'GLEE_BOOTSTRAP uid=%%s gid=%%s testbed=%%s tmpfs=%%s\\n' \"$uid\" \"$gid\" \"$testbed_owner\" \"$tmpfs_owner\"; rm -rf /testbed/* /testbed/.[!.]* /testbed/..?* 2>/dev/null || true; tar -xf /input/base_commit.tar -C /testbed; unset $(compgen -v | grep '^GIT_' || true); git -C /testbed init -q; git -C /testbed add -A; git -c user.name='GLEE control' -c user.email='control@invalid' -c commit.gpgsign=false -C /testbed commit -qm base; git -C /testbed apply --reject --whitespace=nowarn /input/test.patch; bash /input/test_cmd.sh" % (host_uid, host_gid)]
+        args = [docker, "--config", str(cfg), "--host", "unix:///var/run/docker.sock", "create", "--name", cid, "--label", "glee.owner=sanji", "--label", "glee.qualifier=praisonai", "--label", "glee.nonce=" + nonce, "--label", "glee.name=" + cid, "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=64", "--memory=2g", "--memory-swap=2g", "--cpus=1", "--user=%s:%s" % (host_uid, host_gid), "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777,uid=%s,gid=%s" % (host_uid, host_gid), "--tmpfs=/testbed:rw,noexec,nosuid,nodev,size=1024m,mode=1777,uid=%s,gid=%s" % (host_uid, host_gid), "--tmpfs=/.mem0:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=%s,gid=%s" % (host_uid, host_gid), "--mount", "type=bind,src=%s,dst=/input,readonly" % input_dir, "--workdir=/testbed", "--entrypoint=/bin/bash", IMAGE_REPO + "@" + IMAGE_MANIFEST, "-lc", "set -euo pipefail; uid=$(id -u); gid=$(id -g); test \"$uid\" = \"%s\"; test \"$gid\" = \"%s\"; testbed_owner=$(stat -c '%%u:%%g' /testbed); tmpfs_owner=$(stat -c '%%u:%%g' /tmp); mem0_owner=$(stat -c '%%u:%%g:%%a' /.mem0); test \"$mem0_owner\" = \"$uid:$gid:700\"; cache_probe=$(mktemp /.mem0/.glee-write.XXXXXX); rm -f \"$cache_probe\"; test \"$testbed_owner\" = \"$uid:$gid\"; test \"$tmpfs_owner\" = \"$uid:$gid\"; printf 'GLEE_BOOTSTRAP uid=%%s gid=%%s testbed=%%s tmpfs=%%s mem0=%%s mem0_write=1\\n' \"$uid\" \"$gid\" \"$testbed_owner\" \"$tmpfs_owner\" \"$mem0_owner\"; rm -rf /testbed/* /testbed/.[!.]* /testbed/..?* 2>/dev/null || true; tar -xf /input/base_commit.tar -C /testbed; unset $(compgen -v | grep '^GIT_' || true); git -C /testbed init -q; git -C /testbed add -A; git -c user.name='GLEE control' -c user.email='control@invalid' -c commit.gpgsign=false -C /testbed commit -qm base; git -C /testbed apply --reject --whitespace=nowarn /input/test.patch; bash /input/test_cmd.sh" % (host_uid, host_gid)]
         created = run(args, timeout=30, env=env); 
         if created.returncode != 0: raise RuntimeError("container_create_failed")
         actual = created.stdout.strip(); lease.identity["cid"] = actual; report["effect_flags"]["container_create"] = "SUCCEEDED"; report["stage"] = "container_start"

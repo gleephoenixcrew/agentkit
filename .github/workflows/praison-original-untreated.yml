@@ -25,7 +25,7 @@ jobs:
           set -euo pipefail
           driver="$RUNNER_TEMP/praison_untreated_driver.py"
           curl --fail --silent --show-error --location --max-time 30 --output "$driver" "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/tools/praison_untreated_driver.py"
-          echo "d2dd0a4822e7b625de74f64cf0c7d749c8577db5e9f69de5c12691f5a849f7dc  $driver" | sha256sum --check --status
+          echo "88ea4b034ead71a40973908cbec444d31270d4a4c5832fb87297d6e1a82ef4ca  $driver" | sha256sum --check --status
           chmod 700 "$driver"
 
       - name: Install pinned PyArrow in bounded SDK setup scope
