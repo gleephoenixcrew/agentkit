@@ -36,7 +36,7 @@ jobs:
             set -euo pipefail
             mkdir -m 700 "$DOCKER_CONFIG"
             started=$(date +%s); parent_deadline=$((started + 840))
-            helper_sha=75795b1e18d415e14df3df8c1aa25925075b6a18f401b970a4520acdd4df3c8c
+            helper_sha=35eab4cbc5f075438969f1646199012e7c99b47daade96e7dff7e8b460b3b86a
             test "$(sha256sum public_collection/tools/pint_public_collection.py | awk "{print \$1}")" = "$helper_sha"
             avail_kib=$(awk "/^MemAvailable:/{print \$2}" /proc/meminfo)
             required_kib=$(( (8589934592 + 536870912 + 2147483648) / 1024 ))

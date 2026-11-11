@@ -160,7 +160,7 @@ def validate_container(row: dict, *, cid: str, name: str, nonce: str, uid: int, 
         values = tmpfs.get(destination); values = values if isinstance(values, list) else [values]
         if not any(isinstance(x, str) and f"size={size}" in x and f"uid={uid}" in x and f"gid={gid}" in x for x in values):
             raise PreflightError("tmpfs_policy_or_ownership_mismatch")
-    if not any(m.get("Destination") == "/input" and m.get("Type") == "bind" and m.get("RW") is False for m in (row.get("Mounts") or [])):
+    if not any(m.get("Destination") == "/input/base_commit.tar" and m.get("Type") == "bind" and m.get("RW") is False for m in (row.get("Mounts") or [])):
         raise PreflightError("readonly_archive_mount_missing")
 
 
@@ -296,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_preflight(image=args.image, archive=args.base_archive, docker=args.docker, output=args.output)
     except Exception as exc:
         result = {"schema": "glee.pint.public_collection_preflight.v1", "status": "PUBLIC_COLLECTION_BLOCKED",
-                  "reason": type(exc).__name__, "detail": str(exc)[:160], "provider_calls": 0, "docker_execution": False}
+                  "reason": type(exc).__name__, "provider_calls": 0, "docker_execution": False}
         args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n"); args.output.chmod(0o600)
         print(json.dumps(result, sort_keys=True)); return 2
     print(json.dumps({"status": result["status"], "collected_count": result["collect_only"]["collected_count"],
