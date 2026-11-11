@@ -296,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_preflight(image=args.image, archive=args.base_archive, docker=args.docker, output=args.output)
     except Exception as exc:
         result = {"schema": "glee.pint.public_collection_preflight.v1", "status": "PUBLIC_COLLECTION_BLOCKED",
-                  "reason": type(exc).__name__, "provider_calls": 0, "docker_execution": False}
+                  "reason": type(exc).__name__, "detail": str(exc)[:160], "provider_calls": 0, "docker_execution": False}
         args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n"); args.output.chmod(0o600)
         print(json.dumps(result, sort_keys=True)); return 2
     print(json.dumps({"status": result["status"], "collected_count": result["collect_only"]["collected_count"],
