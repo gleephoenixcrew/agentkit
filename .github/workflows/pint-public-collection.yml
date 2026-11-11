@@ -1,0 +1,66 @@
+name: pint-public-collection
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - glee/frontier-capability-20261110-0c8444a85053
+    paths:
+      - public_collection/tools/pint_public_collection.py
+      - .github/workflows/pint-public-collection.yml
+
+permissions:
+  contents: read
+
+jobs:
+  collect-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PINT_BASE: f4aa63eb23a22cedb5f90d7bc8934efba26538c4
+      PINT_IMAGE: starryzhang/sweb.eval.x86_64.hgrecco_1776_pint-2108
+      PINT_IMAGE_MANIFEST: sha256:1a60490322ba75d99032b9981322a099a49eb1abf3481695acbed0e6a539d015
+    steps:
+      - name: Checkout diagnostic bundle
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify and run bounded public preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          unit="glee-pint-public-parent-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo -n systemd-run --unit="$unit" --wait --pipe --collect --uid="$(id -u)" --gid="$(id -g)" --property=SupplementaryGroups=docker --property=CPUQuota=100% --property=MemoryMax=512M --property=MemorySwapMax=0 --property=TasksMax=64 --property=RuntimeMaxSec=900 --setenv=PATH=/usr/bin:/bin --setenv=LANG=C.UTF-8 --setenv=PINT_BASE="$PINT_BASE" --setenv=PINT_IMAGE="$PINT_IMAGE" --setenv=PINT_IMAGE_MANIFEST="$PINT_IMAGE_MANIFEST" --setenv=RUNNER_TEMP="$RUNNER_TEMP" --setenv=GITHUB_WORKSPACE="$GITHUB_WORKSPACE" --setenv=DOCKER_HOST=unix:///var/run/docker.sock --setenv=DOCKER_CONFIG="$RUNNER_TEMP/pint-docker-config" --working-directory="$GITHUB_WORKSPACE" -- /usr/bin/bash -lc '
+            set -euo pipefail
+            mkdir -m 700 "$DOCKER_CONFIG"
+            started=$(date +%s); parent_deadline=$((started + 840))
+            helper_sha=e0d4fa28fbb75001546f4773d3ee6ae006c0b37e88026e8e6810955898443ed5
+            test "$(sha256sum public_collection/tools/pint_public_collection.py | awk "{print \$1}")" = "$helper_sha"
+            avail_kib=$(awk "/^MemAvailable:/{print \$2}" /proc/meminfo)
+            required_kib=$(( (8589934592 + 536870912 + 2147483648) / 1024 ))
+            test "$avail_kib" -ge "$required_kib"
+            docker_root=$(docker --host=unix:///var/run/docker.sock --config "$DOCKER_CONFIG" info --format "{{.DockerRootDir}}")
+            free_bytes=$(df -PB1 "$docker_root" | awk "NR==2 {print \$4}")
+            test "$free_bytes" -ge 3873469260
+            docker --host=unix:///var/run/docker.sock --config "$DOCKER_CONFIG" pull --quiet "${PINT_IMAGE}@${PINT_IMAGE_MANIFEST}"
+            work="$RUNNER_TEMP/pint-public-source"
+            mkdir -m 700 "$work"
+            git -C "$work" init -q
+            git -C "$work" remote add origin https://github.com/hgrecco/pint.git
+            timeout --signal=TERM --kill-after=15s 600s git -C "$work" fetch --depth=1 origin "$PINT_BASE"
+            git -C "$work" archive --format=tar "$PINT_BASE" -o "$work/base_commit.tar"
+            (cd / && git get-tar-commit-id < "$work/base_commit.tar") | grep -Fx "$PINT_BASE"
+            chmod 600 "$work/base_commit.tar"
+            remaining=$((parent_deadline - $(date +%s)))
+            test "$remaining" -ge 660
+            exec /usr/bin/python3 public_collection/tools/pint_public_collection.py --image "${PINT_IMAGE}@${PINT_IMAGE_MANIFEST}" --base-archive "$work/base_commit.tar" --output "$RUNNER_TEMP/pint-public-collection-result.json"
+          '
+      - name: Retire public preflight temporary source/result
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          find "$RUNNER_TEMP/pint-public-source" -depth -type f -delete 2>/dev/null || true
+          find "$RUNNER_TEMP/pint-public-source" -depth -type d -empty -delete 2>/dev/null || true
+          find "$RUNNER_TEMP" -maxdepth 1 -type f -name 'pint-public-collection-result.json' -delete 2>/dev/null || true
