@@ -1,0 +1,69 @@
+name: pint-original-untreated
+
+on:
+  workflow_dispatch:
+
+# Manual-only, single-shot original control. Trial 3/3 remains one dispatch,
+# with no retry/reference/matrix/publish lane.
+permissions:
+  contents: read
+
+jobs:
+  untreated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PINT_TRIAL_NUMBER: "3"
+      PINT_TRIAL_TOTAL: "3"
+      PINT_REMAINING_ORIGINAL_DISPATCHES: "1"
+      PINT_AUTOMATIC_RETRY: "0"
+      PINT_REFERENCE_ALLOWED: "0"
+      PINT_PARENT_SECONDS: "5100"
+      PINT_JOB_SECONDS: "5400"
+      PINT_SDK_SECONDS: "900"
+      PINT_SDK_MEMORY_MIB: "768"
+      PINT_DESKTOP_RAM_RESERVE_GIB: "8"
+    steps:
+      - name: Checkout immutable event commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify public contract before operation setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 tools/public_contract_preflight.py
+
+      - name: Run complete bounded original operation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_RUN_ATTEMPT}" = "1"
+          /usr/bin/python3 tools/pint_ci_operation.py \
+            --workspace "${GITHUB_WORKSPACE}" \
+            --runner-temp "${RUNNER_TEMP}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --attempt "${GITHUB_RUN_ATTEMPT}"
+
+      - name: Upload bounded operational evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pint-original-operation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pint-original-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retire bounded setup state
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          find "${RUNNER_TEMP}/pint-original-sdk-site" -depth -type f -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-sdk-site" -depth -type d -empty -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-sdk-wheel" -depth -type f -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-sdk-wheel" -depth -type d -empty -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-docker-config" -depth -type f -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-docker-config" -depth -type d -empty -delete 2>/dev/null || true

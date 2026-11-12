@@ -1,68 +1,69 @@
-name: Frontier harness runner capability
+name: pint-original-untreated
 
-"on":
-  push:
-    branches: ["glee/frontier-capability-20261110-0c8444a85053"]
-    paths: [".github/workflows/frontier-runner-capability.yml"]
+on:
+  workflow_dispatch:
 
+# Manual-only, single-shot original control. Trial 3/3 remains one dispatch,
+# with no retry/reference/matrix/publish lane.
 permissions:
   contents: read
 
-concurrency:
-  group: glee/frontier-capability-20261110-0c8444a85053
-  cancel-in-progress: false
-
 jobs:
-  capability:
+  untreated:
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 90
+    env:
+      PINT_TRIAL_NUMBER: "3"
+      PINT_TRIAL_TOTAL: "3"
+      PINT_REMAINING_ORIGINAL_DISPATCHES: "1"
+      PINT_AUTOMATIC_RETRY: "0"
+      PINT_REFERENCE_ALLOWED: "0"
+      PINT_PARENT_SECONDS: "5100"
+      PINT_JOB_SECONDS: "5400"
+      PINT_SDK_SECONDS: "900"
+      PINT_SDK_MEMORY_MIB: "768"
+      PINT_DESKTOP_RAM_RESERVE_GIB: "8"
     steps:
-      - name: Read Linux and Docker capability metadata
+      - name: Checkout immutable event commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify public contract before operation setup
         shell: bash
         run: |
-          python3 - <<'PY'
-          import json
-          import platform
-          import shutil
-          import subprocess
-          import sys
-          import tempfile
-          from pathlib import Path
+          set -euo pipefail
+          /usr/bin/python3 tools/public_contract_preflight.py
 
-          report = {
-              "schema": "glee.frontier.runner_capability.v1",
-              "scope": "read-only CI capability observation",
-              "system": platform.system(),
-              "architecture": platform.machine(),
-              "root_free_bytes": shutil.disk_usage("/").free,
-              "docker_present": shutil.which("docker", path="/usr/bin:/bin") is not None,
-              "docker_endpoint": "unix:///var/run/docker.sock",
-              "docker_config": "ephemeral_empty_directory",
-              "docker_environment_sanitized": True,
-              "container_creations": 0,
-              "image_pulls": 0,
-              "model_calls": 0,
-              "benchmark_controls_run": 0,
-              "grading_admission": "NOT_ESTABLISHED_BY_THIS_PROBE",
-          }
-          meminfo = Path("/proc/meminfo").read_text()
-          for name in ("MemTotal", "MemAvailable"):
-              value = next(line for line in meminfo.splitlines() if line.startswith(name + ":"))
-              report[name + "_bytes"] = int(value.split()[1]) * 1024
-          controllers = Path("/sys/fs/cgroup/cgroup.controllers")
-          report["cgroup_v2_controllers"] = controllers.read_text().strip().split() if controllers.exists() else []
-          if report["docker_present"] and Path("/var/run/docker.sock").is_socket():
-              fmt = '{"version":{{json .ServerVersion}},"os":{{json .OSType}},"arch":{{json .Architecture}},"cpus":{{json .NCPU}},"memory_bytes":{{json .MemTotal}},"cgroup_driver":{{json .CgroupDriver}},"cgroup_version":{{json .CgroupVersion}}}'
-              try:
-                  with tempfile.TemporaryDirectory(prefix="glee-frontier-docker-") as config:
-                      result = subprocess.run([shutil.which("docker", path="/usr/bin:/bin"), "--config", config, "--host", "unix:///var/run/docker.sock", "info", "--format", fmt], env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}, capture_output=True, text=True, timeout=10)
-                  report["docker_info_returncode"] = result.returncode
-                  if result.returncode == 0:
-                      report["docker"] = json.loads(result.stdout)
-              except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-                  report["docker_probe_error"] = type(error).__name__
-          passed = (report["system"] == "Linux" and report["architecture"] in ("x86_64", "amd64") and report.get("docker_info_returncode") == 0)
-          report["status"] = "CAPABILITY_OBSERVED" if passed else "CAPABILITY_NOT_CONFIRMED"
-          print("GLEE_RUNNER_PROBE_JSON=" + json.dumps(report, sort_keys=True))
-          sys.exit(0 if passed else 1)
-          PY
+      - name: Run complete bounded original operation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_RUN_ATTEMPT}" = "1"
+          /usr/bin/python3 tools/pint_ci_operation.py \
+            --workspace "${GITHUB_WORKSPACE}" \
+            --runner-temp "${RUNNER_TEMP}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --attempt "${GITHUB_RUN_ATTEMPT}"
+
+      - name: Upload bounded operational evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pint-original-operation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pint-original-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retire bounded setup state
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          find "${RUNNER_TEMP}/pint-original-sdk-site" -depth -type f -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-sdk-site" -depth -type d -empty -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-sdk-wheel" -depth -type f -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-sdk-wheel" -depth -type d -empty -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-docker-config" -depth -type f -delete 2>/dev/null || true
+          find "${RUNNER_TEMP}/pint-original-docker-config" -depth -type d -empty -delete 2>/dev/null || true

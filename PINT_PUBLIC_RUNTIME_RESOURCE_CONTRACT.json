@@ -1,0 +1,61 @@
+{
+  "schema": "glee.pint.public_runtime_resource_contract.v1",
+  "status": "ASSEMBLED_SOURCE_ONLY_HOLD_INDEPENDENT_REVIEW_REQUIRED",
+  "instance_id": "hgrecco__pint-2108",
+  "contract": {
+    "authoritative_source_sha256": "27fa8a9c6407e1f6c951497d048b35168821abeeb2901bf859df761d365a5e19",
+    "transformed_private_contract_sha256": "d533b15fc6b4d207f7d31b0f21ed42ae2dca9350c1983d223a1a7622d4798697"
+  },
+  "pins": {
+    "dataset_revision": "babb27e45e072219195db7a744bbf0d3c1a36e56",
+    "absolute_row": 1801,
+    "first_shard_rows": 944,
+    "local_row": 857,
+    "public_row_sha256": "856b0669fa80d7f1286d474dcde4be357bca51b85314d3aff29dfa7779836e98",
+    "parquet_sha256": "b8cd02f881baf1621b6ed17a2980f82a002d7e895c45c8653b0b696467dbf72e",
+    "parquet_size": 49856992,
+    "base_commit": "f4aa63eb23a22cedb5f90d7bc8934efba26538c4",
+    "image_repo": "starryzhang/sweb.eval.x86_64.hgrecco_1776_pint-2108",
+    "image_manifest": "sha256:1a60490322ba75d99032b9981322a099a49eb1abf3481695acbed0e6a539d015",
+    "pyarrow_version": "26.0.1",
+    "pyarrow_wheel_url": "https://files.pythonhosted.org/packages/d3/79/e2fc9b1317b7a21e7bcd57eb035cac3fe72f47af3efe2ec3b4dea9a08a04/pyarrow-26.0.1-cp312-cp312-manylinux_2_28_x86_64.whl",
+    "pyarrow_wheel_sha256": "c718bf97a92a6dea97fd1062c3b9f9e2e83cb9cc926e752289fa4ffff41738f9"
+  },
+  "resource_frame": {
+    "docker": {
+      "cpu_cores": 1,
+      "memory_mib": 2048,
+      "swap_mib": 0,
+      "pids_limit": 64,
+      "network": "none",
+      "readonly_rootfs": true,
+      "cap_drop": "ALL",
+      "tmpfs": {
+        "/testbed": "1024m,rw,noexec,nosuid,nodev",
+        "/tmp": "256m,rw,noexec,nosuid,nodev"
+      }
+    },
+    "parent": {
+      "cpu_cores": 1,
+      "memory_mib": 512,
+      "swap_mib": 0,
+      "pids_limit": 64
+    },
+    "operation_deadline_seconds": 3600,
+    "cleanup_margin_seconds": 120,
+    "workflow_minutes": 90,
+    "parent_seconds": 5100,
+    "job_seconds": 5400,
+    "sdk_deadline_seconds": 900,
+    "sdk_memory_mib": 768,
+    "desktop_ram_reserve_gib": 8
+  },
+  "trial_fences": {
+    "number": 3,
+    "total": 3,
+    "historical_original_dispatches": 2,
+    "remaining_original_dispatches": 1,
+    "automatic_retry": false,
+    "reference_allowed": false
+  }
+}
